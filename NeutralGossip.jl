@@ -1,50 +1,65 @@
+## NeutralGossip.jl
+##
+## Author: Taylor Kessinger <tkess@sas.upenn.edu>
+## Generic module for Monte Carlo simulation
+## of pairwise gameplay, observation, gossip,
+## and strategy updating.
+
 
 module NeutralGossip
 
     using Statistics
 
-
-    export evolve!, Population, SimParams, GossipParams
-    export get_current_views
+    export evolve!, evolve_modified_loop!, Population, SimParams, GossipParams
+    export get_current_views, get_current_average_fitnesses, get_frequencies
     export do_gossip!, gossip_only!
     export interact!, update_views!
 
+
+    # struct for storing simulation parameters
     struct SimParams
-        N::Int64
-        b::Float64
-        c::Float64
+        N::Int64 # population size
+        b::Float64 # benefit of cooperation
+        c::Float64 # cost of cooperation
         assessment_error::Float64
         performance_error::Float64
         selection_strength::Float64
         strategy_mutation_rate::Float64
-        social_norm::BitMatrix
-        permitted_strategies::Vector{BitVector}
+        social_norm::BitMatrix # contains bits corresponding to good reputation probabilities
+        permitted_strategies::Vector{BitVector} # by default, this is any of ALLD, ALLC, DISC,
+            # but it can be restricted to (e.g.) just DISC
     end
 
+    # Constructor
     function SimParams(N::Int64, b::Float64, c::Float64, assessment_error::Float64,
         performance_error::Float64, selection_strength::Float64,
         strategy_mutation_rate::Float64, social_norm::BitMatrix)
         return SimParams(N, b, c, assessment_error, performance_error,
-                selection_strength, strategy_mutation_rate, social_norm, [BitVector(strat) for strat in [[0,1]]])
+                selection_strength, strategy_mutation_rate, social_norm, [BitVector(strat) for strat in [[0,0],[1,1],[0,1]]])
         end
 
-    mutable struct GossipParams
+    # struct for storing gossip parameters
+    struct GossipParams
         
         tau::Int64
-        gossip_history::Array{BitMatrix}
 
         # Constructor
         function GossipParams(tau::Int64)
-            new(tau,BitMatrix[])
+            new(tau)
         end
 
     end
 
+    # main struct for storing population state
     mutable struct Population
-        strategies::BitMatrix
-        views::BitMatrix
-        actions::BitMatrix
+        strategies::BitMatrix # each individual's strategy:
+            # first bit is defect/cooperate with bad
+            # second bit is defect/cooperate with good
+            # [0,0] is ALLD, [1,1] is ALLC, [0,1] is DISC
+        views::BitMatrix # the i,j element is i's view of j
+        actions::BitMatrix # the i,j element is i's latest action toward j
         fitnesses::Vector{Float64}
+        # Following are several arrays for storing the history of useful attributes
         strategy_history::Array{Vector{Float64}}
         fitness_history::Array{Vector{Float64}}
         views_history::Array{Vector{Float64}}
@@ -70,33 +85,9 @@ module NeutralGossip
         # strategy bit 2 is defect(0)/cooperate(1) with those with good reputations (1)
         pop.actions .= pop.strategies[:,1] .* .!(pop.views) .+ pop.strategies[:,2] .* pop.views
 
-        # for i in 1:size(pop.views, 1), j in 1:size(pop.views, 2)
-        #     view_i_j = pop.views[i, j]
-        #     view_label = view_i_j == 0 ? "bad" : "good"
-        #     strategy_i = pop.strategies[i, :]
-        #     strategy_bits = join([strategy_i[k] == 0 ? "D" : "C" for k in 1:2])
-        #     intention_i_j = strategy_i[view_i_j + 1] ? "cooperate" : "defect"
-        #     action_i_j = pop.actions[i,j] ? "cooperate" : "defect"
-            
-        #     println("For i=$i and j=$j:")
-        #     println("i's view of j: $view_i_j ($view_label)")
-        #     println("i's strategy bits: $strategy_bits")
-        #     println("i intended to: $intention_i_j")
-        #     println("i did: $action_i_j")
-        # end 
 
         # Define an action error mask; this will tell us who makes mistakes
         action_error_mask = rand(sp.N,sp.N) .< sp.performance_error
-
-        # for i in 1:sp.N, j in 1:sp.N
-        #     if action_error_mask[i, j]
-        #         intention = pop.strategies[i, 2] == 1 ? "cooperate" : "defect"
-        #         action = pop.actions[i, j] == 1 ? "cooperates" : "defects"
-        #         println("Mistake: Individual $i accidentally $action with individual $j.")
-        #         println("   - Intention: $i intended to $intention with $j.")
-        #         println("   - New Action: $i $action with $j.")
-        #     end
-        # end
 
         # Individuals who make mistakes defect (action error is asymmetric)
         # i.e., the only way to cooperate (1) is to intend to do so and NOT make a mistake
@@ -110,47 +101,43 @@ module NeutralGossip
 
     function update_views!(pop::Population,sp::SimParams)
         
-        # Each observer j chooses a random recipient k
-        k = rand(1:sp.N, sp.N)
+        # Each i, to update their opinion of j, chooses a random k;
+        # they will use their own view of k and j's action toward k
+        # to update their view of j
+        k = rand(1:sp.N, sp.N, sp.N)
 
-        # j examines what each i in the population did to k...
-        i_actions = [pop.actions[i, k[i]] for i in 1:sp.N]
-
-        # ...and what j's own view of k was
-        j_views = [pop.views[j, k[j]] for j in 1:sp.N]
-
-        # j's new view of i is given by the corresponding social norm index
-        # The first index of the social norm is j's view of k;
-        # the second, i's action toward k
-        # The +1 is needed to map 0 and 1 to array indices 1 and 2
-        pop.views .= sp.social_norm[j_views .+ 1, i_actions .+ 1]
+        # The first index of the social norm is i's view of k;
+        # the second, j's action toward k
+        # The +1 maps {0, 1} to {1, 2}
+        pop.views = BitMatrix([sp.social_norm[(pop.views[i, k[i, j]] + 1),
+            (pop.actions[j, k[i, j]] + 1)] for i in 1:sp.N, j in 1:sp.N])
 
         # Generate a view error mask with specified error probability
         view_error_mask = rand(sp.N, sp.N) .< sp.assessment_error
 
-        # Introduce errors in pop.views using the XOR (^) operation;
+        # Introduce errors in pop.views using the XOR (⊻) operation;
         # if rand() is smaller than assessment_error, flip i's view of j
         pop.views = pop.views .⊻ view_error_mask
 
         # Obtain the strategy-wise and population-wide average views
-        avg_strategy_views = [mean(pop.views[findall(row -> row == strategy, eachrow(pop.strategies)),:]) for strategy in sp.permitted_strategies]
+        # The transpose is because we need the view the population has of each strategy,
+        # not the view each strategy has of the rest of the population
+        avg_strategy_views = [mean(pop.views'[findall(row -> row == strategy, eachrow(pop.strategies)),:]) for strategy in sp.permitted_strategies]
         avg_view = mean(pop.views)
         push!(pop.views_history, vcat(avg_strategy_views, avg_view))
-        # push!(pop.views_history, [avg_view])
 
     end
 
     function update_fitnesses!(pop::Population,sp::SimParams)
-
         # Individual i's fitness is:
         # benefit * everyone who cooperated with i
         # - cost * everyone whom i cooperated with
         pop.fitnesses = ((sp.b * sum(pop.actions,dims=1)' - sp.c * sum(pop.actions,dims=2))[:])/sp.N
+        push!(pop.fitness_history, [mean(pop.fitnesses[findall(row -> row == strategy, eachrow(pop.strategies))]) for strategy in sp.permitted_strategies])
 
     end
 
     function copy_strategy!(pop::Population,sp::SimParams)
-
         # Select two individuals
         i,j = rand(1:sp.N), rand(1:sp.N)
 
@@ -170,30 +157,34 @@ module NeutralGossip
 
     function do_gossip!(pop::Population,sp::SimParams,gp::GossipParams)
         for _ in 1:gp.tau
+            # Select three random individuals.
+            # i will adopt j's view of k.
             i, j, k = rand(1:sp.N, 3)
-            # println("$i's views were $(pop.views[i,:])")
-            # println("$j's views were $(pop.views[j,:])")
-            # println("$k was chosen")
+            # for k in 1:sp.N
+            #     i,j = rand(1:sp.N,2)
             pop.views[i,k] = pop.views[j,k]
-            # println("views are now $(pop.views)")
-            # push!(gp.gossip_history,pop.views)
-            # avg_strategy_views = [count(pop.views[findall(row -> row == strategy, eachrow(pop.strategies)),:]) for strategy in sp.permitted_strategies]
-            # avg_view = mean(pop.views)
-            # push!(pop.views_history, [avg_view])
-            #push!(pop.views_history, vcat(avg_strategy_views, avg_view))
+            # An alternative version of this would be for i to adopt all of j's views.
     
         end
-        avg_strategy_views = [mean(pop.views[findall(row -> row == strategy, eachrow(pop.strategies)),:]) for strategy in sp.permitted_strategies]
+        # Compute the average strategy-wide views and append them
+        # The transpose is because we need the view the population has of each strategy,
+        # not the view each strategy has of the rest of the population
+        avg_strategy_views = [mean(pop.views'[findall(row -> row == strategy, eachrow(pop.strategies)),:]) for strategy in sp.permitted_strategies]
         avg_view = mean(pop.views)
         push!(pop.views_history, vcat(avg_strategy_views, avg_view))
     end
 
+    # Following are several functions that return useful averages
     function get_current_views(pop::Population,sp::SimParams)
-        return [mean(pop.views[findall(row -> row == strategy, eachrow(pop.strategies)),:]) for strategy in [[0,0],[1,1],[0,1]]]
+        return [mean(pop.views'[findall(row -> row == strategy, eachrow(pop.strategies)),:]) for strategy in sp.permitted_strategies]
     end
     
     function get_current_average_fitnesses(pop::Population,sp::SimParams)
-        return [mean(pop.fitnesses[findall(row -> row == strategy, eachrow(pop.strategies))]) for strategy in [[0,0],[1,1],[0,1]]]
+        return [mean(pop.fitnesses[findall(row -> row == strategy, eachrow(pop.strategies))]) for strategy in sp.permitted_strategies]
+    end
+
+    function get_frequencies(pop::Population,sp::SimParams)
+        return [count([all(row .== strategy) for row in eachrow(pop.strategies)])/sp.N for strategy in sp.permitted_strategies]
     end
 
     function mutate_strategy!(pop::Population,sp::SimParams)
@@ -205,31 +196,33 @@ module NeutralGossip
     end
 
     function evolve!(pop::Population, sp::SimParams,gp::GossipParams)
+        # Default evolution loop
         interact!(pop,sp)
         update_fitnesses!(pop,sp)
         update_views!(pop,sp)
         do_gossip!(pop,sp,gp)
         copy_strategy!(pop,sp)
         mutate_strategy!(pop,sp)
-        # push!(pop.strategy_history, pop.strategies[:,:])
+    end
+
+    function evolve_modified_loop!(pop::Population, sp::SimParams,gp::GossipParams)
+        # Modified evolution loop that does view updating first
+        update_views!(pop,sp)
+        do_gossip!(pop,sp,gp)
+        interact!(pop,sp)
+        update_fitnesses!(pop,sp)
+        copy_strategy!(pop,sp)
+        mutate_strategy!(pop,sp)
     end
 
     function gossip_only!(pop::Population, sp::SimParams,gp::GossipParams)
-        # Alternative version of the above that only does gossip
+        # Alternative version of the above that only does gossip, primarily for debugging
         interact!(pop,sp)
-        # println("good view, cooperate: $(sum((pop.views .== 1) .& (pop.actions .== 1)) / sp.N^2)")
-        # println("good view, defect: $(sum((pop.views .== 1) .& (pop.actions .== 0)) / sp.N^2)")
-        # println("bad view, cooperate: $(sum((pop.views .== 0) .& (pop.actions .== 1)) / sp.N^2)")
-        # println("bad view, defect: $(sum((pop.views .== 0) .& (pop.actions .== 0)) / sp.N^2)")
         update_fitnesses!(pop,sp)
         update_views!(pop,sp)
-        # average_agreement = mean([mean(pop.views[i, :] .== pop.views[j, :]) for i in 1:sp.N, j in 1:sp.N])
-        # average_g = mean(pop.views)
-        # println("before gossip: $average_agreement, $average_g")
-
+        average_agreement = mean([mean(pop.views[i, :] .== pop.views[j, :]) for i in 1:sp.N, j in 1:sp.N])
         do_gossip!(pop,sp,gp)
-        # average_agreement = mean([mean(pop.views[i, :] .== pop.views[j, :]) for i in 1:sp.N, j in 1:sp.N])
-        # println("after gossip: $average_agreement, $average_g")
+        average_agreement = mean([mean(pop.views[i, :] .== pop.views[j, :]) for i in 1:sp.N, j in 1:sp.N])
     end
 
 end

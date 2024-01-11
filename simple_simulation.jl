@@ -1,72 +1,64 @@
+## simple_simulation.jl
+##
+## Author: Taylor Kessinger <tkess@sas.upenn.edu>
+## Simulates a population of agents for a fixed gossip length.
+## Iterates the processes of gameplay, view updating, gossip, and strategy updating
+## for a fixed number of generations.
+## Plots useful quantities.
+
 using Revise
 using Statistics
-using PyPlot
+import PyPlot as plt
 
+# Import custom module
 includet("NeutralGossip.jl")
-
-
 using .NeutralGossip
 
-N = 10
-glen = 100000
-simlen = 10000
+N = 50 # population size
+glen = floor(Int64,0.2*N^3) # number of gossip events between action/view update
+simlen = 10000 # number of generations to simulate
 
-sp = SimParams(N,5.0,1.0,0.02,0.02,1.0,0.01,BitMatrix([1 0; 0 1]))
+# Initialize population
+# The social norm is Stern Judging
+sp = SimParams(N,5.0,1.0,0.02,0.02,1.0,0.005,BitMatrix([1 0; 0 1]))
 pop = Population(N)
 gp = GossipParams(glen)
 
-gc_array = zeros(Float64,simlen,5)
 
+# Simulate evolution
 for i in 1:simlen
-    println("$i")
-    gossip_only!(pop,sp,gp)
-    gc_array[i,:] = [(sum((pop.views .== 1) .& (pop.actions .== 1)) / sp.N^2),
-    (sum((pop.views .== 1) .& (pop.actions .== 0)) / sp.N^2),
-    (sum((pop.views .== 0) .& (pop.actions .== 1)) / sp.N^2),
-    (sum((pop.views .== 0) .& (pop.actions .== 0)) / sp.N^2),
-    sum((pop.views .== 1)) / sp.N^2]
+    evolve!(pop,sp,gp)
 end
 
-figure()
-plot(gc_array[:,1], label="GC", color="#FF3366")
-plot(gc_array[:,2], label="GD", color="#3366FF")
-plot(gc_array[:,3], label="BC", color="#33CC33")
-plot(gc_array[:,4], label="BD", color="#FF9933")
-plot(gc_array[:,5], label="good", color="#303030")
+gens_to_skip = 10
+
+# Plot frequency of each strategy over time
+plt.figure()
+plt.plot(1:gens_to_skip:simlen,hcat(pop.strategy_history...)[1,1:gens_to_skip:end],label="ALLD",color="#FF42A1")
+plt.plot(1:gens_to_skip:simlen,hcat(pop.strategy_history...)[2,1:gens_to_skip:end],label="ALLC",color="#479FF8")
+plt.plot(1:gens_to_skip:simlen,hcat(pop.strategy_history...)[3,1:gens_to_skip:end],label="DISC",color="#1DB100")
+plt.ylim(0,1)
+plt.title("strategy frequencies")
 plt.legend(loc=2)
-# println([mean(pop.fitnesses[findall(row -> row == strategy, eachrow(pop.strategies))]) for strategy in [[0,0],[1,1],[0,1]]])
-# println([var(pop.fitnesses[findall(row -> row == strategy, eachrow(pop.strategies))]) for strategy in [[0,0],[1,1],[0,1]]])
 
-# println([mean(pop.views[findall(row -> row == strategy, eachrow(pop.strategies)),:]) for strategy in [[0,0],[1,1],[0,1]]])
-# println([mean(pop.views[:,findall(row -> row == strategy, eachrow(pop.strategies))]) for strategy in [[0,0],[1,1],[0,1]]])
+# Plot average reputation of each strategy over time
+plt.figure()
+plt.plot(1:gens_to_skip:simlen,hcat(pop.views_history...)[1,1:2*gens_to_skip:end],label="ALLD",color="#FF42A1")
+plt.plot(1:gens_to_skip:simlen,hcat(pop.views_history...)[2,1:2*gens_to_skip:end],label="ALLC",color="#479FF8")
+plt.plot(1:gens_to_skip:simlen,hcat(pop.views_history...)[3,1:2*gens_to_skip:end],label="DISC",color="#1DB100")
+plt.plot(1:gens_to_skip:simlen,hcat(pop.views_history...)[4,1:2*gens_to_skip:end],label="total",color="#303030")
+plt.ylim(0,1)
+plt.title("average view (reputation)")
+plt.legend(loc=2)
 
-# figure()
-# plot(hcat(pop.strategy_history...)[1,:],label="ALLD",color="#FF42A1")
-# plot(hcat(pop.strategy_history...)[2,:],label="ALLC",color="#479FF8")
-# plot(hcat(pop.strategy_history...)[3,:],label="DISC",color="#1DB100")
-# plt.legend(loc=2)
+# Plot behavior of each strategy over time
+plt.figure()
+plt.plot(1:gens_to_skip:simlen,hcat(pop.action_history...)[1,1:gens_to_skip:end],label="ALLD",color="#FF42A1")
+plt.plot(1:gens_to_skip:simlen,hcat(pop.action_history...)[2,1:gens_to_skip:end],label="ALLC",color="#479FF8")
+plt.plot(1:gens_to_skip:simlen,hcat(pop.action_history...)[3,1:gens_to_skip:end],label="DISC",color="#1DB100")
+plt.plot(1:gens_to_skip:simlen,hcat(pop.action_history...)[4,1:gens_to_skip:end],label="total",color="#303030")
+plt.ylim(0,1)
+plt.title("average action")
+plt.legend(loc=2)
 
-
-# figure()
-# plot(hcat(pop.views_history...)[1,:],label="ALLD",color="#FF42A1")
-# plot(hcat(pop.views_history...)[2,:],label="ALLC",color="#479FF8")
-# plot(hcat(pop.views_history...)[3,:],label="DISC",color="#1DB100")
-# plot(hcat(pop.views_history...)[4,:],label="total",color="#303030")
-# title("views")
-# plt.legend(loc=2)
-
-# figure()
-# plot(hcat(pop.action_history...)[1,:],label="ALLD",color="#FF42A1")
-# plot(hcat(pop.action_history...)[2,:],label="ALLC",color="#479FF8")
-# plot(hcat(pop.action_history...)[3,:],label="DISC",color="#1DB100")
-# plot(hcat(pop.action_history...)[4,:],label="total",color="#303030")
-# title("actions")
-# plt.legend(loc=2)
-
-# figure()
-# plot(hcat(pop.views_history...)[1,:],label="ALLD",color="#FF42A1")
-# plot(hcat(pop.views_history...)[2,:],label="ALLC",color="#479FF8")
-# scatter(hcat(pop.action_history...)[4,:],hcat(pop.views_history...)[4,:],label="DISC",color="#1DB100")
-# plot(hcat(pop.views_history...)[4,:],label="total",color="#303030")
-# title("actions vs. views")
-# plt.legend(loc=2)
+plt.show()
